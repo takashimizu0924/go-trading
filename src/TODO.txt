@@ -1,0 +1,11 @@
+APIを呼出 Done
+買い注文  Done
+売り注文  Done
+現在価格取得 Done
+オーダー済み価格と現在価格の比較・差分計算  now
+買い・売りの戦略 Stay
+LineAPI呼出 
+Lineで通知を送信 
+Lineからデータを受け取る
+データーベース作成（Mysql) Done
+LogファイルにLogを残す

@@ -1,0 +1,32 @@
+version: "3"
+services: 
+    app:
+        build:
+          context: .
+          dockerfile: ./build/Dockerfile
+        working_dir: /go/src/app
+        volumes: 
+            - ./src:/go/src/app
+        tty: true
+        # networks: 
+          # - go-trading-network
+
+    db:
+        image: mysql:8.0
+        environment: 
+          MYSQL_DATABASE: go_trading_database
+          MYSQL_ROOT_PASSWORD: password
+          MYSQL_PASSWORD: password
+          MYSQL_USER: docker
+        container_name: db-container
+        working_dir: /mysql/db
+        volumes: 
+          - ./db:/mysql/db
+        tty: true
+        # networks: 
+          # - go-trading-network
+# networks: 
+  # go-trading-network:
+    # external: true
+        
+          
