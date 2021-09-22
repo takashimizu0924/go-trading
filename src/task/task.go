@@ -149,4 +149,20 @@ func sellPlaceOrder(product_code string, apiClient *bitflyer.APIClient) {
 		res := utils.CalculateSellPrice(val.Size, ticker.BestBid, val.AveragePrice)
 		log.Println("CalculeteSellResponse", res)
 	}
+
+}
+
+func StreamIngectionData() {
+	var tickerChanel = make(chan bitflyer.Ticker)
+	apiClient := bitflyer.NewBitflyer(config.Config.ApiKey, config.Config.ApiSecret, config.Config.MaxBuy, config.Config.MaxSell)
+	go apiClient.RealTimeGetTicker("BTC_JPY", tickerChanel)
+	for ticker := range tickerChanel {
+		log.Printf("action=StreamIngectionData, %v", ticker)
+		for _, duration := range config.Config.Durations {
+			isCreated := models.CreateCandleWithDuration(ticker, "BTC_JPY", duration)
+			if isCreated == true {
+				//TODO
+			}
+		}
+	}
 }

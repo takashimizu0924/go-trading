@@ -13,6 +13,8 @@ services:
 
     db:
         image: mysql:8.0
+        command:
+          - --sql-mode=NO_ENGINE_SUBSTITUTION
         environment: 
           MYSQL_DATABASE: go_trading_database
           MYSQL_ROOT_PASSWORD: password

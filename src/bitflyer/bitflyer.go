@@ -14,16 +14,18 @@ import (
 	"net/url"
 	"strconv"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 const base_url = "https://api.bitflyer.com/v1/"
 
 type APIClient struct {
-	apiKey  string
-	apiSecret string
-	Max_buy_orders int
+	apiKey          string
+	apiSecret       string
+	Max_buy_orders  int
 	Max_sell_orders int
-	httpClient *http.Client
+	httpClient      *http.Client
 }
 
 func NewBitflyer(key, secret string, max_buy_orders, max_sell_orders int) *APIClient {
@@ -31,10 +33,10 @@ func NewBitflyer(key, secret string, max_buy_orders, max_sell_orders int) *APICl
 	return apiClient
 }
 
-func (apiClient APIClient) header(method, endpoint string, body []byte) map[string]string{
-	timestamp := strconv.FormatInt(time.Now().Unix(),10)
+func (apiClient APIClient) header(method, endpoint string, body []byte) map[string]string {
+	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
 	message := timestamp + method + endpoint + string(body)
-	
+
 	mac := hmac.New(sha256.New, []byte(apiClient.apiSecret))
 	mac.Write([]byte(message))
 	sign := hex.EncodeToString(mac.Sum(nil))
@@ -46,8 +48,8 @@ func (apiClient APIClient) header(method, endpoint string, body []byte) map[stri
 	}
 }
 
-func (apiClient *APIClient) doGETPOST(method, urlPath string, query map[string]string, data []byte) (body []byte, err error){
-	base_url,err := url.Parse(config.BaseURL)
+func (apiClient *APIClient) doGETPOST(method, urlPath string, query map[string]string, data []byte) (body []byte, err error) {
+	base_url, err := url.Parse(config.BaseURL)
 	if err != nil {
 		return
 	}
@@ -62,24 +64,24 @@ func (apiClient *APIClient) doGETPOST(method, urlPath string, query map[string]s
 	}
 	q := req.URL.Query()
 
-	for key,value := range query {
-		q.Add(key,value)
+	for key, value := range query {
+		q.Add(key, value)
 	}
 	req.URL.RawQuery = q.Encode()
 
-	for key, vale := range apiClient.header(method, req.URL.RequestURI(),data){
-		req.Header.Add(key,vale)
+	for key, vale := range apiClient.header(method, req.URL.RequestURI(), data) {
+		req.Header.Add(key, vale)
 	}
-	resp,err := apiClient.httpClient.Do(req)
+	resp, err := apiClient.httpClient.Do(req)
 	if err != nil {
-		return nil,err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	body, err = ioutil.ReadAll(resp.Body)
 	if err != nil {
-		return nil,err
+		return nil, err
 	}
-	return body,nil
+	return body, nil
 }
 
 type Ticker struct {
@@ -97,21 +99,93 @@ type Ticker struct {
 	VolumeByProduct float64 `json:"volume_by_product"`
 }
 
-func (apiClient *APIClient) GetTicker(productCode string) (*Ticker, error){
+func (ticker *Ticker) GetMiddlePrice() float64 {
+	return (ticker.BestBid + ticker.BestAsk) / 2
+}
+
+func (ticker *Ticker) DateTime() time.Time {
+	dateTime, err := time.Parse(time.RFC3339, ticker.Timestamp)
+	if err != nil {
+		log.Println("action=DateTime", err)
+	}
+	return dateTime
+}
+
+func (ticker *Ticker) TruncateDateTime(duration time.Duration) time.Time {
+	return ticker.DateTime().Truncate(duration)
+}
+
+type JsonRPC2 struct {
+	Version string      `json:"jsonrpc"`
+	Method  string      `json:"method"`
+	Params  interface{} `json:"params"`
+	Result  interface{} `json:"result,omitempty"`
+	Id      *int        `json:"id,omitempty"`
+}
+
+type SubscribeParams struct {
+	Channel string `json:"channel"`
+}
+
+func (apiClient *APIClient) RealTimeGetTicker(product_code string, ch chan<- Ticker) {
+	u := url.URL{Scheme: "wss", Host: "ws.lightstream.bitflyer.com", Path: "/json-rpc"}
+	log.Printf("connecting to %s", u.String())
+
+	c, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
+	if err != nil {
+		log.Fatal("dial:", err)
+	}
+	defer c.Close()
+
+	channel := fmt.Sprintf("lightning_ticker_%s", product_code)
+	if err := c.WriteJSON(&JsonRPC2{Version: "2.0", Method: "subscribe", Params: &SubscribeParams{channel}}); err != nil {
+		log.Println("subscribe:", err)
+		return
+	}
+
+OUTER:
+	for {
+		message := new(JsonRPC2)
+		if err := c.ReadJSON(message); err != nil {
+			log.Println("read:", err)
+			return
+		}
+		if message.Method == "channelMessage" {
+			switch v := message.Params.(type) {
+			case map[string]interface{}:
+				for key, binary := range v {
+					if key == "message" {
+						marshaTick, err := json.Marshal(binary)
+						if err != nil {
+							continue OUTER
+						}
+						var ticker Ticker
+						if err := json.Unmarshal(marshaTick, &ticker); err != nil {
+							continue OUTER
+						}
+						ch <- ticker
+					}
+				}
+			}
+		}
+	}
+}
+
+func (apiClient *APIClient) GetTicker(productCode string) (*Ticker, error) {
 	url := "ticker"
-	resp, err := apiClient.doGETPOST("GET", url, map[string]string{"product_code":productCode,},nil)
+	resp, err := apiClient.doGETPOST("GET", url, map[string]string{"product_code": productCode}, nil)
 	// log.Printf("url=%s resp=%s",url,string(resp))
 	if err != nil {
-		log.Printf("action=GetTicker1 err=%s",err.Error())
-		return nil,err
+		log.Printf("action=GetTicker1 err=%s", err.Error())
+		return nil, err
 	}
 	var ticker Ticker
-	err = json.Unmarshal(resp,&ticker)
+	err = json.Unmarshal(resp, &ticker)
 	if err != nil {
-		log.Printf("action=GetTicker2 err=%s",err.Error())
-		return nil,err
+		log.Printf("action=GetTicker2 err=%s", err.Error())
+		return nil, err
 	}
-	return &ticker,nil
+	return &ticker, nil
 }
 
 type Order struct {
@@ -143,42 +217,42 @@ type PlaceOrderResponse struct {
 	OrderId string `json:"child_order_acceptance_id"`
 }
 
-func (apiClient *APIClient) PlaceOrder(order *Order)(*PlaceOrderResponse,error){
+func (apiClient *APIClient) PlaceOrder(order *Order) (*PlaceOrderResponse, error) {
 	data, err := json.Marshal(order)
 	fmt.Println(data)
 	if err != nil {
-		log.Printf("action=PlaceOrder err=%s",err)
-		return nil,err
+		log.Printf("action=PlaceOrder err=%s", err)
+		return nil, err
 	}
 	url := "me/sendchildorder"
-	resp, err := apiClient.doGETPOST("POST",url,map[string]string{},data)
+	resp, err := apiClient.doGETPOST("POST", url, map[string]string{}, data)
 	fmt.Println(string(resp))
 	if err != nil {
-		log.Printf("action=PlaceOrder.doGetPost err=%s",err)
-		return nil,err
+		log.Printf("action=PlaceOrder.doGetPost err=%s", err)
+		return nil, err
 	}
 	var response PlaceOrderResponse
-	err = json.Unmarshal(resp,&response)
+	err = json.Unmarshal(resp, &response)
 	if err != nil {
-		log.Printf("action=PlaceOrder.json.Unmarshal err=%s",err)
-		return nil,err
+		log.Printf("action=PlaceOrder.json.Unmarshal err=%s", err)
+		return nil, err
 	}
-	return &response,nil
+	return &response, nil
 }
 
-func (apiClient *APIClient)GetActiveBuyOrders(product_code, order_status string)(*[]Order, error){
+func (apiClient *APIClient) GetActiveBuyOrders(product_code, order_status string) (*[]Order, error) {
 	url := "me/getchildorders"
 	params := make(map[string]string)
 	params["product_code"] = product_code
 	params["child_order_state"] = order_status
-	resp, err := apiClient.doGETPOST("GET",url, params, nil)
+	resp, err := apiClient.doGETPOST("GET", url, params, nil)
 	if err != nil {
-		log.Printf("action=GetActiveBuyOrder err=%s",err.Error())
-		return nil,err
+		log.Printf("action=GetActiveBuyOrder err=%s", err.Error())
+		return nil, err
 	}
 	var orders []Order
-	err = json.Unmarshal(resp,&orders)
-	return &orders,nil
+	err = json.Unmarshal(resp, &orders)
+	return &orders, nil
 }
 
 type Balance struct {
@@ -187,18 +261,18 @@ type Balance struct {
 	Available   float64 `json:"available"`
 }
 
-func (apiClient *APIClient) GetBalance()([]Balance, error){
+func (apiClient *APIClient) GetBalance() ([]Balance, error) {
 	url := "me/getbalance"
-	resp, err := apiClient.doGETPOST("GET",url,map[string]string{},nil)
+	resp, err := apiClient.doGETPOST("GET", url, map[string]string{}, nil)
 	if err != nil {
-		log.Printf("action=GetBalance err=%s",err.Error())
+		log.Printf("action=GetBalance err=%s", err.Error())
 		return nil, err
 	}
 	var balance []Balance
-	err = json.Unmarshal(resp,&balance)
+	err = json.Unmarshal(resp, &balance)
 	if err != nil {
-		log.Printf("action=GetBalance err=%s",err.Error())
-		return nil,err
+		log.Printf("action=GetBalance err=%s", err.Error())
+		return nil, err
 	}
-	return balance,nil
+	return balance, nil
 }

@@ -9,5 +9,6 @@ import (
 func main() {
 	config.NewConfig()
 	models.NewMysqlBase()
-	task.StartBfService()
+	//task.StartBfService()
+	task.StreamIngectionData()
 }
